@@ -106,6 +106,14 @@ def init_db():
     if "termination_reason" not in conv_columns:
         cursor.execute("ALTER TABLE conversations ADD COLUMN termination_reason TEXT")
 
+    # Safe migration: research trace and reply type stored alongside assistant messages
+    cursor.execute("PRAGMA table_info(messages)")
+    msg_columns = [col[1] for col in cursor.fetchall()]
+    if "trace_json" not in msg_columns:
+        cursor.execute("ALTER TABLE messages ADD COLUMN trace_json TEXT")
+    if "message_type" not in msg_columns:
+        cursor.execute("ALTER TABLE messages ADD COLUMN message_type TEXT")
+
     # Phase 7: Account Warnings table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS account_warnings (

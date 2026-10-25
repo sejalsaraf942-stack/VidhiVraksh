@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -49,9 +50,11 @@ from app.safety import (
     CAT_CRISIS_SUPPORT,
     CRISIS_SUPPORT_MESSAGES,
 )
+from app.research_trace import build_trace
 from app.phase6_data import SIMULATED_LAND_RECORDS, PROPERTY_VERIFICATION_CHECKLIST
 
 router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger(__name__)
 
 # --- 1. Authentication Endpoints ---
 
@@ -632,7 +635,7 @@ def get_conversation_details(
     cursor.execute("""
     SELECT * FROM messages
     WHERE conversation_id = ?
-    ORDER BY created_at ASC
+    ORDER BY created_at ASC, rowid ASC
     """, (conv_id,))
     messages = []
     for m in cursor.fetchall():
@@ -644,6 +647,12 @@ def get_conversation_details(
                 m_dict["sources"] = []
         else:
             m_dict["sources"] = []
+        trace_raw = m_dict.pop("trace_json", None)
+        try:
+            m_dict["trace"] = json.loads(trace_raw) if trace_raw else None
+        except Exception:
+            m_dict["trace"] = None
+        m_dict["type"] = m_dict.pop("message_type", None)
         messages.append(m_dict)
     conn.close()
 
@@ -747,6 +756,7 @@ def send_chat_message(
     now_iso = datetime.now(timezone.utc).isoformat()
 
     conv_id = req.conversation_id
+    is_new_conversation = not conv_id
     if conv_id:
         cursor.execute("SELECT * FROM conversations WHERE id = ?", (conv_id,))
         conv_row = cursor.fetchone()
@@ -807,10 +817,12 @@ def send_chat_message(
             clarif_content = CRISIS_SUPPORT_MESSAGES.get(lang, CRISIS_SUPPORT_MESSAGES["en"])
         else:
             clarif_content = safety_eval.clarification_text or "Could you please clarify the specific lawful purpose of your request?"
+        reply_type = "crisis_support" if is_crisis else "clarification_needed"
+        trace = build_trace(safety_eval.category, lang, mode)
         cursor.execute("""
-        INSERT INTO messages (id, conversation_id, role, content, sources_json, created_at)
-        VALUES (?, ?, 'assistant', ?, NULL, ?)
-        """, (asst_msg_id, conv_id, clarif_content, now_iso))
+        INSERT INTO messages (id, conversation_id, role, content, sources_json, trace_json, message_type, created_at)
+        VALUES (?, ?, 'assistant', ?, NULL, ?, ?, ?)
+        """, (asst_msg_id, conv_id, clarif_content, json.dumps(trace), reply_type, now_iso))
 
         cursor.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now_iso, conv_id))
         conn.commit()
@@ -834,7 +846,8 @@ def send_chat_message(
                 "created_at": now_iso,
                 "mode": mode,
                 "language": lang,
-                "type": "crisis_support" if is_crisis else "clarification_needed",
+                "type": reply_type,
+                "trace": trace,
                 "disclaimer": (
                     "Support resources: you are not alone." if is_crisis
                     else "Safety Clarification: Establishing lawful purpose before proceeding."
@@ -891,10 +904,11 @@ def send_chat_message(
             f"[Chat Terminated: Warning {new_warnings} of 3 recorded for this account.]"
         )
 
+        trace = build_trace(safety_eval.category, lang, mode)
         cursor.execute("""
-        INSERT INTO messages (id, conversation_id, role, content, sources_json, created_at)
-        VALUES (?, ?, 'assistant', ?, NULL, ?)
-        """, (asst_msg_id, conv_id, refusal_content, now_iso))
+        INSERT INTO messages (id, conversation_id, role, content, sources_json, trace_json, message_type, created_at)
+        VALUES (?, ?, 'assistant', ?, NULL, ?, 'safety_refusal', ?)
+        """, (asst_msg_id, conv_id, refusal_content, json.dumps(trace), now_iso))
 
         conn.commit()
         conn.close()
@@ -918,6 +932,7 @@ def send_chat_message(
                 "mode": mode,
                 "language": lang,
                 "type": "safety_refusal",
+                "trace": trace,
                 "disclaimer": "Enforcement Notice: Prohibited request refused under safety policy.",
                 "follow_up_suggestions": [],
                 "insufficient_info": False,
@@ -935,15 +950,30 @@ def send_chat_message(
         }
 
     # CASE C: Legitimate or Victim Support Inquiry -> Proceed Normally
-    response_data = generate_legal_response(query=content, lang=lang, mode=mode)
+    try:
+        response_data = generate_legal_response(query=content, lang=lang, mode=mode)
+    except Exception:
+        # Nothing is committed for this turn; log without the user's message text.
+        logger.exception("Legal retrieval failed for conversation %s", conv_id)
+        conn.rollback()
+        if is_new_conversation:
+            cursor.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
+            conn.commit()
+        conn.close()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The legal database could not be searched right now. Please try again.",
+        )
 
     asst_msg_id = f"msg_{uuid.uuid4().hex[:12]}"
     sources_serialized = json.dumps(response_data.get("sources", [])) if response_data.get("sources") else None
+    trace = build_trace(safety_eval.category, lang, mode, response_data)
+    reply_type = response_data.get("type", "answer")
 
     cursor.execute("""
-    INSERT INTO messages (id, conversation_id, role, content, sources_json, created_at)
-    VALUES (?, ?, 'assistant', ?, ?, ?)
-    """, (asst_msg_id, conv_id, response_data["content"], sources_serialized, now_iso))
+    INSERT INTO messages (id, conversation_id, role, content, sources_json, trace_json, message_type, created_at)
+    VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?)
+    """, (asst_msg_id, conv_id, response_data["content"], sources_serialized, json.dumps(trace), reply_type, now_iso))
 
     cursor.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now_iso, conv_id))
     conn.commit()
@@ -967,7 +997,8 @@ def send_chat_message(
             "created_at": now_iso,
             "mode": mode,
             "language": lang,
-            "type": response_data.get("type", "answer"),
+            "type": reply_type,
+            "trace": trace,
             "disclaimer": response_data.get("disclaimer"),
             "follow_up_suggestions": response_data.get("follow_up_suggestions", []),
             "insufficient_info": response_data.get("insufficient_info", False),

@@ -5,7 +5,8 @@ and renders structured responses in Normal or Professional mode across 6 languag
 """
 
 import re
-from typing import Dict, List, Any, Optional
+import time
+from typing import Dict, List, Any, Optional, Tuple
 from app.corpus import DEMO_CORPUS
 
 # Ambiguous questions that lack necessary context to determine legal subject
@@ -76,8 +77,12 @@ LANDMARK_CASE_NAMES = {
     "case_rajagopal_1994": ["auto shankar", "rajagopal"]
 }
 
-def score_record(query_norm: str, record: Dict[str, Any], lang: str) -> int:
+def score_record(query_norm: str, record: Dict[str, Any], lang: str, hits: Optional[List[str]] = None) -> int:
+    """Scores a record against the query. If `hits` is given, the matched terms are appended to it."""
     score = 0
+    def hit(term: str) -> None:
+        if hits is not None and term not in hits:
+            hits.append(term)
     words = [w for w in query_norm.split() if w not in STOP_WORDS]
 
     # 1. Direct landmark party name or landmark phrase match
@@ -86,12 +91,14 @@ def score_record(query_norm: str, record: Dict[str, Any], lang: str) -> int:
         for name_token in LANDMARK_CASE_NAMES[rec_id]:
             if name_token in query_norm:
                 score += 10
+                hit(name_token)
                 break
 
     # 2. Citation exact sequence match (e.g. "4 scc 225", "10 scc 1")
     citation = record.get("citation", "").lower()
     if citation and citation in query_norm:
         score += 10
+        hit(record.get("citation", ""))
 
     # 3. Match keywords for requested language
     lang_keywords = record.get("keywords_by_lang", {}).get(lang, [])
@@ -99,11 +106,13 @@ def score_record(query_norm: str, record: Dict[str, Any], lang: str) -> int:
         kw_norm = kw.lower()
         if kw_norm in query_norm:
             score += 5
+            hit(kw_norm)
         else:
             kw_tokens = set(kw_norm.split())
             for w in words:
                 if len(w) >= 3 and w in kw_tokens:
                     score += 3
+                    hit(w)
 
     # 4. Match English keywords as universal fallback for statutory terms
     en_keywords = record.get("keywords_by_lang", {}).get("en", [])
@@ -111,32 +120,53 @@ def score_record(query_norm: str, record: Dict[str, Any], lang: str) -> int:
         kw_norm = kw.lower()
         if kw_norm in query_norm:
             score += 4
+            hit(kw_norm)
         else:
             kw_tokens = set(kw_norm.split())
             for w in words:
                 if len(w) >= 3 and w in kw_tokens:
                     score += 2
+                    hit(w)
 
     # 5. Title significant token match (+2 per token, requiring length >= 5)
     title_tokens = set(record["title"].lower().split()) - STOP_WORDS
     for w in words:
         if len(w) >= 5 and w in title_tokens:
             score += 2
+            hit(w)
 
     return score
 
 MIN_RETRIEVAL_SCORE = 4
 
-def retrieve_records(query: str, lang: str = "en", limit: int = 3) -> List[Dict[str, Any]]:
+def retrieve_records_with_stats(query: str, lang: str = "en", limit: int = 3) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Keyword-scores every corpus record against the query and returns the top matches together with
+    observable statistics about the search (records searched, matches, matched terms per record).
+    """
+    started = time.perf_counter()
     query_norm = normalize_text(query)
     scored = []
     for rec in DEMO_CORPUS:
-        sc = score_record(query_norm, rec, lang)
+        hits: List[str] = []
+        sc = score_record(query_norm, rec, lang, hits)
         if sc >= MIN_RETRIEVAL_SCORE:
-            scored.append((sc, rec))
+            scored.append((sc, rec, hits))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [item[1] for item in scored[:limit]]
+    selected = scored[:limit]
+    stats = {
+        "method": "keyword_match",
+        "records_searched": len(DEMO_CORPUS),
+        "records_matched": len(scored),
+        "matched_terms": {rec["id"]: hits[:6] for _, rec, hits in selected},
+        "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+    }
+    return [rec for _, rec, _ in selected], stats
+
+
+def retrieve_records(query: str, lang: str = "en", limit: int = 3) -> List[Dict[str, Any]]:
+    return retrieve_records_with_stats(query, lang, limit)[0]
 
 # Localized Responses for Ambiguous and Insufficient Queries
 CLARIFICATION_RESPONSES = {
@@ -217,6 +247,7 @@ def format_source_cards(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         cards.append({
             "id": r["id"],
             "title": r["title"],
+            "topic": r.get("topic", ""),
             "statute": r.get("statute", ""),
             "section": r.get("citation") or r.get("section", ""),
             "citation": r.get("citation", ""),
@@ -256,11 +287,12 @@ def generate_legal_response(
             "sources": [],
             "follow_up_suggestions": clarif.get("follow_ups", []),
             "insufficient_info": False,
-            "disclaimer": "Demo Notice: VIDHIVRAKSH provides informational guidance only and is not a substitute for a legal advocate."
+            "disclaimer": "Demo Notice: VIDHIVRAKSH provides informational guidance only and is not a substitute for a legal advocate.",
+            "trace_meta": {"clarity": "needs_context"},
         }
 
     # Step 2: Retrieve records
-    matched_records = retrieve_records(query, safe_lang, limit=3)
+    matched_records, search_stats = retrieve_records_with_stats(query, safe_lang, limit=3)
 
     # Step 3: Handle unsupported queries
     if not matched_records:
@@ -275,7 +307,8 @@ def generate_legal_response(
             "sources": [],
             "follow_up_suggestions": ["Explain a rental agreement", "What are my rights under BNSS for FIR?", "How does Kesavananda Bharati apply?"],
             "insufficient_info": True,
-            "disclaimer": "Demo Notice: VIDHIVRAKSH provides informational guidance only and is not a substitute for a legal advocate."
+            "disclaimer": "Demo Notice: VIDHIVRAKSH provides informational guidance only and is not a substitute for a legal advocate.",
+            "trace_meta": {"clarity": "clear", "search": search_stats, "answer_basis": "corpus_limitation_notice"},
         }
 
     # Step 4: Construct structured response based on mode and record type
@@ -358,5 +391,11 @@ Primary indexed authority: {top_record['statute']}, {top_record.get('section', '
             "Consult an advocate"
         ],
         "insufficient_info": False,
-        "disclaimer": "Demo Legal Information: VIDHIVRAKSH provides educational starting points, not formal legal advice."
+        "disclaimer": "Demo Legal Information: VIDHIVRAKSH provides educational starting points, not formal legal advice.",
+        "trace_meta": {
+            "clarity": "clear",
+            "search": search_stats,
+            "answer_basis": "top_record_template",
+            "answer_record_id": top_record["id"],
+        },
     }
