@@ -1,0 +1,303 @@
+@import "tailwindcss";
+
+@theme {
+  /* Brand Tokens: Warm gold, Deep green, Black, Muted sage, Warm cream */
+  --color-warm-cream: #F6E5D0;
+  --color-deep-green: #1F3A2E;
+  --color-warm-gold: #C4A47A;
+  --color-black: #000000;
+  --color-muted-sage: #A4A494;
+
+  /* Aliased Semantic Surfaces */
+  --color-parchment: #F6E5D0;
+  --color-pure-white: #ffffff;
+  --color-ink-black: #000000;
+  --color-charcoal: #1F3A2E;
+  --color-aubergine-black: #1F3A2E;
+  --color-ash: #A4A494;
+  --color-dim: #A4A494;
+  --color-bone: #A4A494;
+
+  /* Typography */
+  --font-abcfavorit-book: 'ABCfavorit Book', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* Typography — Scale */
+  --text-caption: 12px;
+  --leading-caption: 1.4;
+  --tracking-caption: 0.1px;
+  --text-body-sm: 14px;
+  --leading-body-sm: 1.5;
+  --text-body-lg: 17px;
+  --leading-body-lg: 1.5;
+  --text-subheading: 20px;
+  --leading-subheading: 1.4;
+  --text-heading-sm: 28px;
+  --leading-heading-sm: 1.3;
+  --text-heading: 32px;
+  --leading-heading: 1.3;
+  --tracking-heading: -0.02px;
+  --text-heading-lg: 40px;
+  --leading-heading-lg: 1.2;
+  --tracking-heading-lg: -0.02px;
+  --text-display: 48px;
+  --leading-display: 1.1;
+  --tracking-display: -0.02px;
+
+  /* Border Radius */
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-full: 100px;
+}
+
+:root {
+  /* Brand Source of Truth */
+  --color-warm-cream: #F6E5D0;
+  --color-deep-green: #1F3A2E;
+  --color-warm-gold: #C4A47A;
+  --color-black: #000000;
+  --color-muted-sage: #A4A494;
+
+  /* Theme mappings */
+  --color-parchment: #F6E5D0;
+  --color-pure-white: #ffffff;
+  --color-ink-black: #000000;
+  --color-charcoal: #1F3A2E;
+  --color-aubergine-black: #1F3A2E;
+  --color-ash: #A4A494;
+  --color-dim: #A4A494;
+  --color-bone: #A4A494;
+
+  /* Background & Foreground */
+  --background: #F6E5D0;
+  --foreground: #000000;
+
+  /* Surfaces */
+  --surface-parchment-canvas: #F6E5D0;
+  --surface-white-card: #ffffff;
+  --surface-aubergine-inversion: #1F3A2E;
+}
+
+html {
+  scroll-behavior: smooth;
+  background-color: #F6E5D0;
+}
+
+body {
+  background-color: #F6E5D0;
+  color: #000000;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  overflow-x: hidden;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Engineering dossier scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F6E5D0;
+}
+::-webkit-scrollbar-thumb {
+  background: #A4A494;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #C4A47A;
+}
+
+/* Legal research trace: restrained entrance, reveal and progress motion */
+@keyframes vr-trace-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes vr-trace-pop {
+  from { opacity: 0; transform: scale(0.6); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes vr-trace-progress {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+.vr-trace-row {
+  animation: vr-trace-in 220ms ease-out both;
+  animation-delay: calc(var(--vr-i, 0) * 50ms);
+}
+.vr-trace-reveal,
+.vr-answer-in {
+  animation: vr-trace-in 200ms ease-out both;
+}
+.vr-trace-pop {
+  animation: vr-trace-pop 180ms ease-out both;
+}
+.vr-trace-progress {
+  animation: vr-trace-progress 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vr-trace-row,
+  .vr-trace-reveal,
+  .vr-answer-in,
+  .vr-trace-pop,
+  .vr-trace-progress {
+    animation: none;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Homepage motion (additive). Scoped to the homepage wrapper, which
+   contains the .home-motion-anchor rendered by <HomeMotion />.
+   Sections are never transformed: Core Features renders a fixed modal
+   inside its section, and a transformed ancestor would displace it.
+   ------------------------------------------------------------------ */
+@keyframes home-rise {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes home-zoom {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes home-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes home-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+@keyframes home-sheen {
+  0% { transform: translateX(-120%); }
+  35%, 100% { transform: translateX(120%); }
+}
+@keyframes home-twinkle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Scroll progress bar and hero spotlight (layers rendered by HomeMotion) */
+.home-scroll-progress {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 2px;
+  z-index: 60;
+  pointer-events: none;
+}
+.home-scroll-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #C4A47A, #1F3A2E);
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+}
+.home-hero-spotlight {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  background: radial-gradient(440px circle at var(--spot-x, 50%) var(--spot-y, 50%), rgba(196, 164, 122, 0.22), transparent 70%);
+  mix-blend-mode: multiply;
+}
+.home-hero-spotlight[data-active] {
+  opacity: 1;
+}
+
+/* Hero entrance: copy column cascades in, the visual panel settles in */
+div:has(> .home-motion-anchor) > section:first-child > div > div > div:first-child > * {
+  animation: home-rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+}
+div:has(> .home-motion-anchor) > section:first-child > div > div > div:first-child > :nth-child(2) { animation-delay: 0.08s; }
+div:has(> .home-motion-anchor) > section:first-child > div > div > div:first-child > :nth-child(3) { animation-delay: 0.16s; }
+div:has(> .home-motion-anchor) > section:first-child > div > div > div:first-child > :nth-child(4) { animation-delay: 0.24s; }
+div:has(> .home-motion-anchor) > section:first-child > div > div > div:first-child > :nth-child(5) { animation-delay: 0.32s; }
+div:has(> .home-motion-anchor) > section:first-child > div > div > div:first-child > :nth-child(n + 6) { animation-delay: 0.4s; }
+div:has(> .home-motion-anchor) > section:first-child > div > div > div:nth-child(2) {
+  animation: home-zoom 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.2s backwards;
+}
+
+/* Hero emblem: rings turn slowly while the emblem floats */
+div:has(> .home-motion-anchor) > section:first-child svg[viewBox="0 0 200 200"] {
+  transform-origin: 50% 50%;
+  animation: home-spin 90s linear infinite;
+}
+div:has(> .home-motion-anchor) > section:first-child div:has(> svg[viewBox="0 0 200 200"]) {
+  animation: home-float 6s ease-in-out infinite;
+}
+
+/* Primary call to action: periodic light sheen and an arrow nudge on hover */
+div:has(> .home-motion-anchor) > section:first-child a[href="/workspace"] {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+div:has(> .home-motion-anchor) > section:first-child a[href="/workspace"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(110deg, transparent 30%, rgba(246, 229, 208, 0.4) 50%, transparent 70%);
+  transform: translateX(-120%);
+  animation: home-sheen 4.5s ease-in-out 1.4s infinite;
+}
+div:has(> .home-motion-anchor) > section:first-child a[href="/workspace"] svg {
+  transition: transform 0.25s ease;
+}
+div:has(> .home-motion-anchor) > section:first-child a[href="/workspace"]:hover svg {
+  transform: translateX(3px);
+}
+
+/* About section: the dotted grid marks twinkle softly */
+div:has(> .home-motion-anchor) #about [aria-hidden="true"].grid > * {
+  animation: home-twinkle 3.2s ease-in-out infinite;
+}
+div:has(> .home-motion-anchor) #about [aria-hidden="true"].grid > :nth-child(3n + 2) { animation-delay: 0.6s; }
+div:has(> .home-motion-anchor) #about [aria-hidden="true"].grid > :nth-child(3n) { animation-delay: 1.2s; }
+
+/* Scroll reveals: elements are only hidden once HomeMotion is observing them */
+div:has(> .home-motion-anchor)[data-motion="on"] [data-reveal]:not([data-revealed]) {
+  opacity: 0;
+}
+div:has(> .home-motion-anchor) [data-revealed] {
+  animation: home-rise 0.75s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+}
+div:has(> .home-motion-anchor) [data-revealed]:nth-child(2) { animation-delay: 0.07s; }
+div:has(> .home-motion-anchor) [data-revealed]:nth-child(3) { animation-delay: 0.14s; }
+div:has(> .home-motion-anchor) [data-revealed]:nth-child(4) { animation-delay: 0.21s; }
+div:has(> .home-motion-anchor) [data-revealed]:nth-child(5) { animation-delay: 0.28s; }
+div:has(> .home-motion-anchor) [data-revealed]:nth-child(n + 6) { animation-delay: 0.35s; }
+
+/* Cards lift on hover (existing color transitions are kept in the list) */
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  div:has(> .home-motion-anchor) [data-reveal-card],
+  div:has(> .home-motion-anchor) > section:first-child .grid .grid > div {
+    transition: transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 0.35s ease,
+      background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  }
+  div:has(> .home-motion-anchor) [data-reveal-card]:hover,
+  div:has(> .home-motion-anchor) > section:first-child .grid .grid > div:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 16px 32px -20px rgba(31, 58, 46, 0.5), 0 0 0 1px rgba(196, 164, 122, 0.55);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  div:has(> .home-motion-anchor) > section:first-child > div > div > div,
+  div:has(> .home-motion-anchor) > section:first-child > div > div > div:first-child > *,
+  div:has(> .home-motion-anchor) > section:first-child svg[viewBox="0 0 200 200"],
+  div:has(> .home-motion-anchor) > section:first-child div:has(> svg[viewBox="0 0 200 200"]),
+  div:has(> .home-motion-anchor) > section:first-child a[href="/workspace"]::after,
+  div:has(> .home-motion-anchor) #about [aria-hidden="true"].grid > *,
+  div:has(> .home-motion-anchor) [data-revealed] {
+    animation: none;
+  }
+  div:has(> .home-motion-anchor) > section:first-child a[href="/workspace"]:hover svg {
+    transform: none;
+  }
+  .home-hero-spotlight {
+    display: none;
+  }
+}

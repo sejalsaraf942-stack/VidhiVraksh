@@ -1,0 +1,29 @@
+# Render blueprint for the VIDHIVRAKSH API (FastAPI). The Next.js frontend deploys separately on Vercel.
+services:
+  - type: web
+    name: vidhivraksh-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      # Fresh database on the service's own disk (free-tier disks reset on each deploy).
+      - key: LIBRA_DB_PATH
+        value: /tmp/vidhivraksh.db
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: COOKIE_SECURE
+        value: "true"
+      # Set to the Vercel site URL once it exists, e.g. https://vidhivraksh.vercel.app
+      - key: CORS_ORIGINS
+        sync: false
+      - key: CORS_ORIGIN_REGEX
+        value: https://vidhivraksh[a-z0-9-]*\.vercel\.app

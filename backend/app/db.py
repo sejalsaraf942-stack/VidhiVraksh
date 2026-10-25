@@ -17,7 +17,7 @@ def verify_password(password: str, hashed_password: str) -> bool:
     except Exception:
         return False
 
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../libra.db"))
+DB_PATH = os.getenv("LIBRA_DB_PATH") or os.path.abspath(os.path.join(os.path.dirname(__file__), "../../libra.db"))
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
@@ -106,14 +106,6 @@ def init_db():
     if "termination_reason" not in conv_columns:
         cursor.execute("ALTER TABLE conversations ADD COLUMN termination_reason TEXT")
 
-    # Safe migration: research trace and reply type stored alongside assistant messages
-    cursor.execute("PRAGMA table_info(messages)")
-    msg_columns = [col[1] for col in cursor.fetchall()]
-    if "trace_json" not in msg_columns:
-        cursor.execute("ALTER TABLE messages ADD COLUMN trace_json TEXT")
-    if "message_type" not in msg_columns:
-        cursor.execute("ALTER TABLE messages ADD COLUMN message_type TEXT")
-
     # Phase 7: Account Warnings table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS account_warnings (
@@ -155,6 +147,14 @@ def init_db():
         FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
     );
     """)
+
+    # Safe migration: research trace and reply type stored alongside assistant messages
+    cursor.execute("PRAGMA table_info(messages)")
+    msg_columns = [col[1] for col in cursor.fetchall()]
+    if "trace_json" not in msg_columns:
+        cursor.execute("ALTER TABLE messages ADD COLUMN trace_json TEXT")
+    if "message_type" not in msg_columns:
+        cursor.execute("ALTER TABLE messages ADD COLUMN message_type TEXT")
 
     # 5. Uploaded Documents table
     cursor.execute("""

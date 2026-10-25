@@ -6,6 +6,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 
 from app.db import get_connection, hash_password, verify_password
+from app.config import settings
 from app.auth import (
     SignUpRequest,
     LoginRequest,
@@ -153,14 +154,16 @@ def sign_up_user(req: SignUpRequest, response: Response):
         key="vidhivraksh_session",
         value=access_token,
         httponly=True,
-        samesite="lax",
+        samesite=settings.COOKIE_SAMESITE,
+        secure=settings.COOKIE_SECURE,
         max_age=int(token_delta.total_seconds()),
     )
     response.set_cookie(
         key="libra_session",
         value=access_token,
         httponly=True,
-        samesite="lax",
+        samesite=settings.COOKIE_SAMESITE,
+        secure=settings.COOKIE_SECURE,
         max_age=int(token_delta.total_seconds()),
     )
 
@@ -223,14 +226,16 @@ def login_user(req: LoginRequest, response: Response):
         key="vidhivraksh_session",
         value=access_token,
         httponly=True,
-        samesite="lax",
+        samesite=settings.COOKIE_SAMESITE,
+        secure=settings.COOKIE_SECURE,
         max_age=int(token_delta.total_seconds()),
     )
     response.set_cookie(
         key="libra_session",
         value=access_token,
         httponly=True,
-        samesite="lax",
+        samesite=settings.COOKIE_SAMESITE,
+        secure=settings.COOKIE_SECURE,
         max_age=int(token_delta.total_seconds()),
     )
 
@@ -357,7 +362,8 @@ def verify_mock_otp(req: OTPVerify, response: Response):
         key="libra_session",
         value=access_token,
         httponly=True,
-        samesite="lax",
+        samesite=settings.COOKIE_SAMESITE,
+        secure=settings.COOKIE_SECURE,
         max_age=int(token_delta.total_seconds()),
     )
 
