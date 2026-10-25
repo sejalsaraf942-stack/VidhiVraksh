@@ -35,9 +35,20 @@ from app.auth import (
     CaseNoteCreate,
     CaseTaskCreate,
     CaseTaskUpdate,
+    ReviewRequestCreate,
+    CheckoutRequest,
 )
 from app.retrieval import generate_legal_response
 from app.consistency import check_document_consistency
+from app.safety import (
+    evaluate_message_safety,
+    CAT_LEGITIMATE,
+    CAT_VICTIM_SUPPORT,
+    CAT_AMBIGUOUS,
+    CAT_HARMFUL,
+    CAT_CRISIS_SUPPORT,
+    CRISIS_SUPPORT_MESSAGES,
+)
 from app.phase6_data import SIMULATED_LAND_RECORDS, PROPERTY_VERIFICATION_CHECKLIST
 
 router = APIRouter(prefix="/api/v1")
@@ -195,7 +206,7 @@ def login_user(req: LoginRequest, response: Response):
     if user_dict.get("status") == "suspended":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is suspended. Please contact support."
+            detail="Account has been suspended due to repeated safety policy violations."
         )
 
     token_delta = timedelta(days=30) if req.remember_me else timedelta(days=1)
@@ -370,6 +381,25 @@ def update_user_profile(
     lang = updates.language if updates.language in VALID_LANGUAGES else current_user["language"]
     mode = updates.mode if updates.mode in VALID_MODES else current_user["mode"]
 
+    # Phase 8: Server-side entitlement check for Professional Mode
+    if updates.mode == "professional":
+        is_entitled = bool(
+            current_user.get("is_pro_entitled") or
+            current_user.get("subscription") == "professional" or
+            current_user.get("role") in ["lawyer", "admin"]
+        )
+        if not is_entitled:
+            cursor.execute("SELECT id FROM demo_entitlements WHERE user_id = ? AND status = 'active'", (current_user["id"],))
+            if cursor.fetchone():
+                is_entitled = True
+
+        if not is_entitled:
+            conn.close()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Professional Mode requires an active plan entitlement. Please visit the pricing page to subscribe."
+            )
+
     cursor.execute("""
     UPDATE users
     SET name = ?, language = ?, mode = ?, updated_at = ?
@@ -382,6 +412,143 @@ def update_user_profile(
     conn.close()
 
     return UserResponse(**updated_user)
+
+# --- Phase 8: Billing, Plans & Simulated Checkout ---
+
+DEMO_PLANS = [
+    {
+        "id": "pro_legal",
+        "name": "Pro Legal",
+        "badge": "Popular",
+        "description": "Comprehensive legal research, full statutory analysis, and structured legal memorandums for citizens and small businesses.",
+        "monthly_price_inr": 499,
+        "yearly_price_inr": 4999,
+        "features": [
+            "Professional Mode legal memorandums",
+            "All 30 landmark Supreme Court precedents",
+            "Unlimited legal awareness consultations",
+            "Direct clause consistency validation",
+            "Bilingual citations & ratio decidendi analysis"
+        ]
+    },
+    {
+        "id": "advocate_suite",
+        "name": "Advocate Suite",
+        "badge": "For Practitioners",
+        "description": "Full practice management workspace with timeline tracking, evidence vault, case task scheduling, and complete precedent discovery.",
+        "monthly_price_inr": 1499,
+        "yearly_price_inr": 14990,
+        "features": [
+            "Everything in Pro Legal plan",
+            "Lawyer Case Management & client matter files",
+            "Procedural timeline event tracking",
+            "Evidence review and cataloging vault",
+            "Client tasks, priority flags & limitation alarms",
+            "Multi-device persistent sync"
+        ]
+    }
+]
+PLAN_MAP = {p["id"]: p for p in DEMO_PLANS}
+
+@router.get("/billing/plans")
+def list_billing_plans():
+    """Returns available demonstration plans and pricing tiers."""
+    return {
+        "plans": DEMO_PLANS,
+        "disclaimer": "Prototype Notice: All amounts are demonstration figures in INR. No real monetary transactions occur.",
+        "currency": "INR",
+    }
+
+@router.get("/billing/entitlement")
+def get_user_entitlement(current_user: dict = Depends(get_current_user)):
+    """Returns the authenticated user's current Professional Mode entitlement status."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+    SELECT * FROM demo_entitlements
+    WHERE user_id = ? AND status = 'active'
+    ORDER BY created_at DESC LIMIT 1
+    """, (current_user["id"],))
+    ent = cursor.fetchone()
+    conn.close()
+
+    is_entitled = bool(
+        current_user.get("is_pro_entitled") or
+        current_user.get("subscription") == "professional" or
+        current_user.get("role") in ["lawyer", "admin"] or
+        ent
+    )
+
+    return {
+        "is_entitled": is_entitled,
+        "plan": current_user.get("subscription", "free"),
+        "mode": current_user.get("mode", "normal"),
+        "is_simulated": True,
+        "entitlement": dict(ent) if ent else None,
+    }
+
+@router.post("/billing/checkout")
+def process_simulated_checkout(
+    req: CheckoutRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Processes simulated checkout for Professional Mode access."""
+    plan_id = req.plan_id.strip().lower()
+    interval = req.billing_interval.strip().lower()
+
+    if plan_id not in PLAN_MAP:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid plan identifier: {plan_id}")
+    if interval not in ["monthly", "yearly"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Billing interval must be 'monthly' or 'yearly'")
+
+    plan = PLAN_MAP[plan_id]
+    amount_inr = plan["yearly_price_inr"] if interval == "yearly" else plan["monthly_price_inr"]
+    ent_id = f"ent_{uuid.uuid4().hex[:12]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Record simulated entitlement
+    cursor.execute("""
+    INSERT INTO demo_entitlements (id, user_id, plan_id, plan_name, billing_interval, amount_inr, is_simulated, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 1, 'active', ?)
+    """, (ent_id, current_user["id"], plan_id, plan["name"], interval, amount_inr, now_iso))
+
+    # Activate Professional Mode and entitlement on user
+    cursor.execute("""
+    UPDATE users
+    SET is_pro_entitled = 1, subscription = 'professional', mode = 'professional', updated_at = ?
+    WHERE id = ?
+    """, (now_iso, current_user["id"]))
+
+    cursor.execute("""
+    UPDATE subscriptions
+    SET plan = 'professional', query_limit = 500
+    WHERE user_id = ?
+    """, (current_user["id"],))
+
+    conn.commit()
+
+    cursor.execute("SELECT * FROM users WHERE id = ?", (current_user["id"],))
+    updated_user = dict(cursor.fetchone())
+    conn.close()
+
+    return {
+        "success": True,
+        "message": "Simulated purchase successful. Professional Mode is now activated.",
+        "entitlement": {
+            "id": ent_id,
+            "plan_id": plan_id,
+            "plan_name": plan["name"],
+            "billing_interval": interval,
+            "amount_inr": amount_inr,
+            "is_simulated": True,
+            "status": "active",
+            "created_at": now_iso,
+        },
+        "user": UserResponse(**updated_user),
+    }
 
 @router.post("/auth/signout")
 def sign_out(response: Response, current_user: dict = Depends(get_current_user)):
@@ -554,13 +721,20 @@ def delete_conversation(
         "id": conv_id,
     }
 
-# --- 3. Chat Workspace: Deterministic Legal Assistant ---
+# --- 3. Chat Workspace: Deterministic Legal Assistant & Intelligent Safety ---
 
 @router.post("/chat/message")
 def send_chat_message(
     req: ChatMessageRequest,
     current_user: dict = Depends(get_current_user)
 ):
+    # Enforce suspended account status
+    if current_user.get("status") == "suspended":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account has been suspended due to repeated safety policy violations."
+        )
+
     content = req.content.strip() if req.content else ""
     if not content:
         raise HTTPException(
@@ -586,6 +760,15 @@ def send_chat_message(
                 detail="Access forbidden: You do not own this conversation.",
             )
         conv = dict(conv_row)
+
+        # Enforce conversation termination
+        if conv.get("is_terminated"):
+            conn.close()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This conversation was terminated due to a safety policy violation and cannot accept further messages."
+            )
+
         lang = req.language or conv.get("language") or current_user.get("language", "en")
         mode = req.mode or conv.get("mode") or current_user.get("mode", "normal")
     else:
@@ -596,10 +779,17 @@ def send_chat_message(
         title = content[:45] + ("..." if len(content) > 45 else "")
 
         cursor.execute("""
-        INSERT INTO conversations (id, user_id, title, language, mode, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO conversations (id, user_id, title, language, mode, is_terminated, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 0, ?, ?)
         """, (conv_id, current_user["id"], title, lang, mode, now_iso, now_iso))
         conn.commit()
+
+    # Fetch recent messages in conversation for context
+    cursor.execute("SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at ASC", (conv_id,))
+    recent_messages = [dict(r) for r in cursor.fetchall()]
+
+    # Run Intelligent Safety Classification
+    safety_eval = evaluate_message_safety(text=content, recent_messages=recent_messages, lang=lang)
 
     # 1. Save user message
     user_msg_id = f"msg_{uuid.uuid4().hex[:12]}"
@@ -608,10 +798,145 @@ def send_chat_message(
     VALUES (?, ?, 'user', ?, NULL, ?)
     """, (user_msg_id, conv_id, content, now_iso))
 
-    # 2. Run deterministic retrieval and legal answer generator
+    # CASE A: Ambiguous Request -> Return Neutral Clarification Question (No Warning)
+    # Self-harm signals reuse this path with support resources instead of a question (No Warning).
+    if safety_eval.category in (CAT_AMBIGUOUS, CAT_CRISIS_SUPPORT):
+        is_crisis = safety_eval.category == CAT_CRISIS_SUPPORT
+        asst_msg_id = f"msg_{uuid.uuid4().hex[:12]}"
+        if is_crisis:
+            clarif_content = CRISIS_SUPPORT_MESSAGES.get(lang, CRISIS_SUPPORT_MESSAGES["en"])
+        else:
+            clarif_content = safety_eval.clarification_text or "Could you please clarify the specific lawful purpose of your request?"
+        cursor.execute("""
+        INSERT INTO messages (id, conversation_id, role, content, sources_json, created_at)
+        VALUES (?, ?, 'assistant', ?, NULL, ?)
+        """, (asst_msg_id, conv_id, clarif_content, now_iso))
+
+        cursor.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now_iso, conv_id))
+        conn.commit()
+        conn.close()
+
+        return {
+            "conversation_id": conv_id,
+            "user_message": {
+                "id": user_msg_id,
+                "conversation_id": conv_id,
+                "role": "user",
+                "content": content,
+                "created_at": now_iso,
+            },
+            "assistant_message": {
+                "id": asst_msg_id,
+                "conversation_id": conv_id,
+                "role": "assistant",
+                "content": clarif_content,
+                "sources": [],
+                "created_at": now_iso,
+                "mode": mode,
+                "language": lang,
+                "type": "crisis_support" if is_crisis else "clarification_needed",
+                "disclaimer": (
+                    "Support resources: you are not alone." if is_crisis
+                    else "Safety Clarification: Establishing lawful purpose before proceeding."
+                ),
+                "follow_up_suggestions": [],
+                "insufficient_info": False,
+            },
+            "safety": safety_eval.to_dict(),
+            "warning": None,
+            "is_terminated": False,
+        }
+
+    # CASE B: Harmful Request -> Refuse + Record Warning + Terminate Chat (+ Suspend if 3rd)
+    if safety_eval.category == CAT_HARMFUL:
+        # Atomic warning calculation
+        cursor.execute("SELECT warning_count FROM users WHERE id = ?", (current_user["id"],))
+        res = cursor.fetchone()
+        curr_warnings = res[0] if (res and res[0] is not None) else 0
+        new_warnings = curr_warnings + 1
+
+        warn_id = f"warn_{uuid.uuid4().hex[:12]}"
+        cursor.execute("""
+        INSERT INTO account_warnings (
+            id, user_id, conversation_id, message_id, rule_id,
+            policy_category, warning_number, reason, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            warn_id, current_user["id"], conv_id, user_msg_id, safety_eval.rule_id,
+            "harmful_assistance", new_warnings, safety_eval.reason, now_iso
+        ))
+
+        # Update user warning count
+        is_suspended = (new_warnings >= 3)
+        if is_suspended:
+            cursor.execute("""
+            UPDATE users SET warning_count = ?, status = 'suspended', updated_at = ? WHERE id = ?
+            """, (new_warnings, now_iso, current_user["id"]))
+        else:
+            cursor.execute("""
+            UPDATE users SET warning_count = ?, updated_at = ? WHERE id = ?
+            """, (new_warnings, now_iso, current_user["id"]))
+
+        # Terminate current conversation
+        cursor.execute("""
+        UPDATE conversations SET is_terminated = 1, termination_reason = ?, updated_at = ? WHERE id = ?
+        """, (safety_eval.reason, now_iso, conv_id))
+
+        # Store refusal assistant message
+        asst_msg_id = f"msg_{uuid.uuid4().hex[:12]}"
+        refusal_content = (
+            f"⚠️ SAFETY REFUSAL\n\n"
+            f"{safety_eval.refusal_text}\n\n"
+            f"{safety_eval.lawful_alternative}\n\n"
+            f"[Chat Terminated: Warning {new_warnings} of 3 recorded for this account.]"
+        )
+
+        cursor.execute("""
+        INSERT INTO messages (id, conversation_id, role, content, sources_json, created_at)
+        VALUES (?, ?, 'assistant', ?, NULL, ?)
+        """, (asst_msg_id, conv_id, refusal_content, now_iso))
+
+        conn.commit()
+        conn.close()
+
+        return {
+            "conversation_id": conv_id,
+            "user_message": {
+                "id": user_msg_id,
+                "conversation_id": conv_id,
+                "role": "user",
+                "content": content,
+                "created_at": now_iso,
+            },
+            "assistant_message": {
+                "id": asst_msg_id,
+                "conversation_id": conv_id,
+                "role": "assistant",
+                "content": refusal_content,
+                "sources": [],
+                "created_at": now_iso,
+                "mode": mode,
+                "language": lang,
+                "type": "safety_refusal",
+                "disclaimer": "Enforcement Notice: Prohibited request refused under safety policy.",
+                "follow_up_suggestions": [],
+                "insufficient_info": False,
+            },
+            "safety": safety_eval.to_dict(),
+            "warning": {
+                "warning_id": warn_id,
+                "warning_number": new_warnings,
+                "max_warnings": 3,
+                "rule_id": safety_eval.rule_id,
+                "reason": safety_eval.reason,
+                "is_suspended": is_suspended,
+            },
+            "is_terminated": True,
+        }
+
+    # CASE C: Legitimate or Victim Support Inquiry -> Proceed Normally
     response_data = generate_legal_response(query=content, lang=lang, mode=mode)
 
-    # 3. Save assistant message
     asst_msg_id = f"msg_{uuid.uuid4().hex[:12]}"
     sources_serialized = json.dumps(response_data.get("sources", [])) if response_data.get("sources") else None
 
@@ -620,10 +945,7 @@ def send_chat_message(
     VALUES (?, ?, 'assistant', ?, ?, ?)
     """, (asst_msg_id, conv_id, response_data["content"], sources_serialized, now_iso))
 
-    # 4. Update conversation timestamp
-    cursor.execute("""
-    UPDATE conversations SET updated_at = ? WHERE id = ?
-    """, (now_iso, conv_id))
+    cursor.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now_iso, conv_id))
     conn.commit()
     conn.close()
 
@@ -650,8 +972,60 @@ def send_chat_message(
             "follow_up_suggestions": response_data.get("follow_up_suggestions", []),
             "insufficient_info": response_data.get("insufficient_info", False),
         },
-        "mode": mode,
-        "language": lang,
+        "safety": safety_eval.to_dict(),
+        "warning": None,
+        "is_terminated": False,
+    }
+
+@router.post("/safety/review-request")
+def submit_safety_warning_review(
+    req: ReviewRequestCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Submits a dispute/review request for an account safety warning."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM account_warnings WHERE id = ? AND user_id = ?", (req.warning_id, current_user["id"]))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Warning record not found.")
+
+    rev_id = f"rev_{uuid.uuid4().hex[:12]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    cursor.execute("""
+    INSERT INTO warning_reviews (id, user_id, warning_id, reason, status, created_at)
+    VALUES (?, ?, ?, ?, 'pending_review', ?)
+    """, (rev_id, current_user["id"], req.warning_id, req.reason.strip(), now_iso))
+    conn.commit()
+    conn.close()
+    return {
+        "success": True,
+        "status": "pending_review",
+        "review_id": rev_id,
+        "message": "Warning review request submitted for audit."
+    }
+
+@router.get("/safety/status")
+def get_safety_status(current_user: dict = Depends(get_current_user)):
+    """Returns current account safety warning count and status."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT warning_count, status FROM users WHERE id = ?", (current_user["id"],))
+    row = cursor.fetchone()
+    warning_count = row[0] if (row and row[0] is not None) else 0
+    status_val = row[1] if row else "active"
+
+    cursor.execute("SELECT * FROM account_warnings WHERE user_id = ? ORDER BY created_at DESC", (current_user["id"],))
+    warnings = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+
+    return {
+        "warning_count": warning_count,
+        "max_warnings": 3,
+        "status": status_val,
+        "is_suspended": (status_val == "suspended" or warning_count >= 3),
+        "warnings": warnings
     }
 
 # --- 4. Protected Documents ---

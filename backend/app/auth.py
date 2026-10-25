@@ -65,8 +65,14 @@ class UserResponse(BaseModel):
     mode: str
     subscription: str
     status: str
+    is_pro_entitled: Optional[bool] = False
     created_at: str
     updated_at: str
+
+class CheckoutRequest(BaseModel):
+    plan_id: str
+    billing_interval: str # "monthly" or "yearly"
+    payment_method: Optional[str] = "simulated_upi"
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -161,7 +167,7 @@ def get_current_user(
     if user.get("status") == "suspended":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is suspended. Please contact support.",
+            detail="Account has been suspended due to repeated safety policy violations.",
         )
     return user
 
@@ -258,4 +264,8 @@ class CaseTaskUpdate(BaseModel):
     is_completed: Optional[bool] = None
     priority: Optional[str] = None
     title: Optional[str] = None
+
+class ReviewRequestCreate(BaseModel):
+    warning_id: str
+    reason: str
 

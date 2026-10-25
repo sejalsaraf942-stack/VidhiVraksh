@@ -39,14 +39,61 @@ def is_ambiguous_query(text: str) -> bool:
 STOP_WORDS = {
     "what", "are", "the", "for", "and", "can", "how", "with", "from", "this",
     "that", "does", "mean", "have", "been", "will", "would", "about", "your",
-    "give", "tell", "need", "legal", "law", "india", "under", "code", "rule"
+    "give", "tell", "need", "legal", "law", "india", "under", "code", "rule",
+    "requirements", "procedure", "guidelines", "general", "cases", "case"
+}
+
+LANDMARK_CASE_NAMES = {
+    "case_kesavananda_1973": ["kesavananda", "bharati"],
+    "case_maneka_1978": ["maneka", "maneka gandhi"],
+    "case_puttaswamy_2017": ["puttaswamy"],
+    "case_vishaka_1997": ["vishaka"],
+    "case_dk_basu_1997": ["dk basu", "d.k. basu"],
+    "case_lalita_kumari_2014": ["lalita kumari"],
+    "case_arnesh_kumar_2014": ["arnesh kumar", "arnesh"],
+    "case_shreya_singhal_2015": ["shreya singhal", "singhal"],
+    "case_navtej_johar_2018": ["navtej johar", "navtej singh johar"],
+    "case_shayara_bano_2017": ["shayara bano"],
+    "case_joseph_shine_2018": ["joseph shine"],
+    "case_common_cause_2018": ["common cause"],
+    "case_anuradha_bhasin_2020": ["anuradha bhasin", "bhasin"],
+    "case_sr_bommai_1994": ["sr bommai", "s.r. bommai", "bommai"],
+    "case_indra_sawhney_1992": ["indra sawhney", "sawhney", "mandal"],
+    "case_mc_mehta_1987": ["mc mehta", "m.c. mehta", "oleum gas"],
+    "case_shah_bano_1985": ["shah bano"],
+    "case_olga_tellis_1985": ["olga tellis", "tellis"],
+    "case_vineet_narain_1998": ["vineet narain"],
+    "case_pramati_2014": ["pramati"],
+    "case_subhash_mahajan_2018": ["subhash mahajan", "kashinath mahajan"],
+    "case_nn_global_2023": ["nn global", "n.n. global"],
+    "case_electoral_bonds_2024": ["electoral bond", "electoral bonds"],
+    "case_supriyo_2023": ["supriyo"],
+    "case_iamai_rbi_2020": ["iamai"],
+    "case_swiss_ribbons_2019": ["swiss ribbons"],
+    "case_nalsa_2014": ["nalsa"],
+    "case_venkatachala_1959": ["venkatachala", "thimmajamma"],
+    "case_satwant_sawhney_1967": ["satwant singh", "satwant sawhney"],
+    "case_rajagopal_1994": ["auto shankar", "rajagopal"]
 }
 
 def score_record(query_norm: str, record: Dict[str, Any], lang: str) -> int:
     score = 0
     words = [w for w in query_norm.split() if w not in STOP_WORDS]
 
-    # 1. Match keywords for requested language
+    # 1. Direct landmark party name or landmark phrase match
+    rec_id = record.get("id", "")
+    if rec_id in LANDMARK_CASE_NAMES:
+        for name_token in LANDMARK_CASE_NAMES[rec_id]:
+            if name_token in query_norm:
+                score += 10
+                break
+
+    # 2. Citation exact sequence match (e.g. "4 scc 225", "10 scc 1")
+    citation = record.get("citation", "").lower()
+    if citation and citation in query_norm:
+        score += 10
+
+    # 3. Match keywords for requested language
     lang_keywords = record.get("keywords_by_lang", {}).get(lang, [])
     for kw in lang_keywords:
         kw_norm = kw.lower()
@@ -58,7 +105,7 @@ def score_record(query_norm: str, record: Dict[str, Any], lang: str) -> int:
                 if len(w) >= 3 and w in kw_tokens:
                     score += 3
 
-    # 2. Match English keywords as universal fallback for statutory terms (e.g. "fir", "bns", "rent")
+    # 4. Match English keywords as universal fallback for statutory terms
     en_keywords = record.get("keywords_by_lang", {}).get("en", [])
     for kw in en_keywords:
         kw_norm = kw.lower()
@@ -70,10 +117,10 @@ def score_record(query_norm: str, record: Dict[str, Any], lang: str) -> int:
                 if len(w) >= 3 and w in kw_tokens:
                     score += 2
 
-    # 3. Match specific title words (excluding general legal terms)
+    # 5. Title significant token match (+2 per token, requiring length >= 5)
     title_tokens = set(record["title"].lower().split()) - STOP_WORDS
     for w in words:
-        if len(w) >= 4 and w in title_tokens:
+        if len(w) >= 5 and w in title_tokens:
             score += 2
 
     return score
@@ -171,13 +218,20 @@ def format_source_cards(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "id": r["id"],
             "title": r["title"],
             "statute": r.get("statute", ""),
-            "section": r.get("section", ""),
-            "court_or_authority": r.get("court_or_authority", ""),
-            "source_name": r.get("source_name", "Official Indian Statute"),
+            "section": r.get("citation") or r.get("section", ""),
+            "citation": r.get("citation", ""),
+            "court": r.get("court", r.get("court_or_authority", "Supreme Court of India")),
+            "year": r.get("year"),
+            "court_or_authority": r.get("court_or_authority", "Supreme Court of India"),
+            "holding_summary": r.get("key_holding", r.get("short_explanation", "")),
+            "legal_principle": r.get("legal_principle", ""),
+            "why_it_matters": r.get("why_it_matters", ""),
+            "source_name": r.get("source_name", "Supreme Court of India"),
             "official_url": r.get("official_url", ""),
-            "verification_status": r.get("verification_status", "verified"),
+            "verification_status": r.get("verification_status", "verified_landmark_precedent"),
             "limitations": r.get("limitations", "Subject to specific facts and state enactments."),
-            "is_demo": True,
+            "is_demo": r.get("is_demo", False),
+            "is_landmark_case": r.get("is_landmark_case", False),
         })
     return cards
 
@@ -219,18 +273,40 @@ def generate_legal_response(
             "mode": safe_mode,
             "language": safe_lang,
             "sources": [],
-            "follow_up_suggestions": ["Explain a rental agreement", "What are my rights under BNSS for FIR?", "How does an Indian will work?"],
+            "follow_up_suggestions": ["Explain a rental agreement", "What are my rights under BNSS for FIR?", "How does Kesavananda Bharati apply?"],
             "insufficient_info": True,
             "disclaimer": "Demo Notice: VIDHIVRAKSH provides informational guidance only and is not a substitute for a legal advocate."
         }
 
-    # Step 4: Construct structured response based on mode
+    # Step 4: Construct structured response based on mode and record type
     top_record = matched_records[0]
     source_cards = format_source_cards(matched_records)
+    is_case = top_record.get("is_landmark_case", False)
 
     if safe_mode == "professional":
-        # Professional Mode: Structured legal memorandum
-        content = f"""### LEGAL MEMORANDUM & STATUTORY BRIEF
+        if is_case:
+            content = f"""### LEGAL MEMORANDUM & JUDICIAL PRECEDENT BRIEF
+**Precedent:** {top_record['title']}
+**Citation:** {top_record.get('citation', '')} ({top_record.get('year', '')}) | {top_record.get('court', 'Supreme Court of India')}
+**Subject:** {top_record.get('topic', '').replace('_', ' ').title()} | **Primary Enactment:** {top_record['statute']}
+
+#### 1. Factual Matrix & Issue
+{top_record.get('facts_summary', '')}
+
+#### 2. Judicial Holding & Ruling
+{top_record.get('key_holding', top_record['short_explanation'])}
+
+#### 3. Established Legal Principle & Ratio Decidendi
+{top_record.get('legal_principle', '')}
+
+#### 4. Constitutional & Jurisprudential Significance
+• {top_record.get('why_it_matters', '')}
+• Precedent is binding under Article 141 of the Constitution of India across all sub-ordinate courts.
+• Official Source: {top_record['source_name']} ({top_record['official_url']}).
+"""
+        else:
+            # Professional Mode: Structured legal memorandum for statutory record
+            content = f"""### LEGAL MEMORANDUM & STATUTORY BRIEF
 **Subject:** {top_record['title']}
 **Primary Enactment:** {top_record['statute']} ({top_record.get('section', 'General Provisions')})
 **Authority / Precedent:** {top_record.get('court_or_authority', 'Statutory Authority')}
@@ -246,8 +322,21 @@ def generate_legal_response(
 Primary indexed authority: {top_record['statute']}, {top_record.get('section', '')}. Verification status: {top_record.get('verification_status', 'verified')}.
 """
     else:
-        # Normal Mode: Approachable, plain-language guidance
-        content = f"""**{top_record['title']}**
+        if is_case:
+            content = f"""**{top_record['title']} ({top_record.get('year', '')})**
+*Citation: {top_record.get('citation', '')} — Supreme Court of India*
+
+{top_record.get('summary', top_record['short_explanation'])}
+
+**Key Legal Takeaways:**
+• **What the Court Decided:** {top_record.get('key_holding', '')}
+• **Legal Principle:** {top_record.get('legal_principle', '')}
+• **Why It Matters to Citizens:** {top_record.get('why_it_matters', '')}
+• **Governing Law:** {top_record['statute']}
+"""
+        else:
+            # Normal Mode: Approachable, plain-language guidance
+            content = f"""**{top_record['title']}**
 
 {top_record['short_explanation']}
 
@@ -264,7 +353,7 @@ Primary indexed authority: {top_record['statute']}, {top_record.get('section', '
         "language": safe_lang,
         "sources": source_cards,
         "follow_up_suggestions": [
-            f"What documents do I need for {top_record['topic'].replace('_', ' ')}?",
+            f"Tell me more about {top_record['title'][:30]}",
             "What if there is a dispute?",
             "Consult an advocate"
         ],

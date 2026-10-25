@@ -46,11 +46,31 @@ def init_db():
     );
     """)
 
-    # Safe migration: ensure password_hash column exists
+    # Safe migration: ensure password_hash, warning_count, and is_pro_entitled columns exist in users
     cursor.execute("PRAGMA table_info(users)")
     user_columns = [col[1] for col in cursor.fetchall()]
     if "password_hash" not in user_columns:
         cursor.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+    if "warning_count" not in user_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN warning_count INTEGER DEFAULT 0")
+    if "is_pro_entitled" not in user_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_pro_entitled INTEGER DEFAULT 0")
+
+    # 1b. Demo Entitlements and Simulated Checkout table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS demo_entitlements (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        plan_id TEXT NOT NULL,
+        plan_name TEXT NOT NULL,
+        billing_interval TEXT NOT NULL,
+        amount_inr INTEGER NOT NULL,
+        is_simulated INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    """)
 
     # 2. Mock OTP table
     cursor.execute("""
@@ -70,8 +90,47 @@ def init_db():
         title TEXT NOT NULL,
         language TEXT NOT NULL DEFAULT 'en',
         mode TEXT NOT NULL DEFAULT 'normal',
+        is_terminated INTEGER DEFAULT 0,
+        termination_reason TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    """)
+
+    # Safe migration: ensure is_terminated and termination_reason exist in conversations
+    cursor.execute("PRAGMA table_info(conversations)")
+    conv_columns = [col[1] for col in cursor.fetchall()]
+    if "is_terminated" not in conv_columns:
+        cursor.execute("ALTER TABLE conversations ADD COLUMN is_terminated INTEGER DEFAULT 0")
+    if "termination_reason" not in conv_columns:
+        cursor.execute("ALTER TABLE conversations ADD COLUMN termination_reason TEXT")
+
+    # Phase 7: Account Warnings table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS account_warnings (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        conversation_id TEXT,
+        message_id TEXT,
+        rule_id TEXT NOT NULL,
+        policy_category TEXT NOT NULL,
+        warning_number INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    """)
+
+    # Phase 7: Warning Reviews table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS warning_reviews (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        warning_id TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
     """)
@@ -103,7 +162,7 @@ def init_db():
     );
     """)
 
-    # 6. Legal Case Records table (20 Curated Landmark Judgments RAG foundation)
+    # 6. Legal Case Records table (30 Curated Landmark Judgments RAG foundation)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS legal_case_records (
         id TEXT PRIMARY KEY,
@@ -113,12 +172,24 @@ def init_db():
         year INTEGER NOT NULL,
         statute TEXT,
         topic TEXT NOT NULL,
+        key_question TEXT,
+        facts_summary TEXT,
         summary TEXT NOT NULL,
         key_holding TEXT NOT NULL,
+        legal_principle TEXT,
+        why_it_matters TEXT,
         keywords_json TEXT NOT NULL,
-        official_url TEXT
+        official_url TEXT,
+        verification_status TEXT DEFAULT 'verified_landmark_precedent'
     );
     """)
+
+    # Safe migration for legal_case_records columns
+    cursor.execute("PRAGMA table_info(legal_case_records)")
+    case_cols = [c[1] for c in cursor.fetchall()]
+    for col_name in ["key_question", "facts_summary", "legal_principle", "why_it_matters", "verification_status"]:
+        if col_name not in case_cols:
+            cursor.execute(f"ALTER TABLE legal_case_records ADD COLUMN {col_name} TEXT")
 
     # 7. Safety Warnings table
     cursor.execute("""
@@ -291,14 +362,19 @@ def seed_demo_data(conn: sqlite3.Connection):
     cursor.execute("SELECT id FROM users WHERE id = 'user_demo_002'")
     if not cursor.fetchone():
         cursor.execute("""
-        INSERT INTO users (id, name, email, password_hash, phone, role, language, mode, subscription, status, created_at, updated_at)
-        VALUES ('user_demo_002', 'Advocate Priya Iyer', 'priya.law@example.test', ?, '+91 98111 22334', 'lawyer', 'en', 'professional', 'professional', 'active', ?, ?)
+        INSERT INTO users (id, name, email, password_hash, phone, role, language, mode, subscription, status, is_pro_entitled, created_at, updated_at)
+        VALUES ('user_demo_002', 'Advocate Priya Iyer', 'priya.law@example.test', ?, '+91 98111 22334', 'lawyer', 'en', 'professional', 'professional', 'active', 1, ?, ?)
         """, (demo_pw_hash, now_iso, now_iso))
 
         cursor.execute("""
         INSERT INTO subscriptions (id, user_id, plan, queries_today, query_limit, last_reset_date)
         VALUES ('sub_demo_002', 'user_demo_002', 'professional', 0, 100, ?)
         """, (now_iso[:10],))
+    else:
+        cursor.execute("UPDATE users SET is_pro_entitled = 1, subscription = 'professional' WHERE id = 'user_demo_002'")
+
+    # Ensure all lawyer and admin roles have is_pro_entitled = 1
+    cursor.execute("UPDATE users SET is_pro_entitled = 1 WHERE role IN ('lawyer', 'admin')")
 
     # Ensure existing users without password_hash have a demo password set
     cursor.execute("UPDATE users SET password_hash = ? WHERE password_hash IS NULL", (demo_pw_hash,))
@@ -398,5 +474,23 @@ def seed_demo_data(conn: sqlite3.Connection):
                 INSERT INTO case_tasks (id, case_id, title, description, due_date, priority, status, created_at)
                 VALUES (?, ?, ?, '', ?, ?, ?, ?)
                 """, (f"task_{c['id']}_{idx}", c["id"], task["title"], task["due_date"], task["priority"], task["status"], now_iso))
+
+    # Phase 8-12: Seed 30 Landmark Case Records into legal_case_records
+    from app.landmark_cases import LANDMARK_CASES
+    for c in LANDMARK_CASES:
+        cursor.execute("SELECT id FROM legal_case_records WHERE id = ?", (c["id"],))
+        if not cursor.fetchone():
+            cursor.execute("""
+            INSERT INTO legal_case_records (
+                id, case_title, citation, court, year, statute, topic,
+                key_question, facts_summary, summary, key_holding, legal_principle,
+                why_it_matters, keywords_json, official_url, verification_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                c["id"], c["case_title"], c["citation"], c["court"], c["year"], c["statute"],
+                c["topic"], c["key_question"], c["facts_summary"], c["summary"], c["key_holding"],
+                c["legal_principle"], c["why_it_matters"], json.dumps(c["keywords_by_lang"]),
+                c["official_url"], c["verification_status"]
+            ))
 
     conn.commit()

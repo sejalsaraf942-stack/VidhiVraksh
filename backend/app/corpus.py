@@ -228,3 +228,33 @@ DEMO_CORPUS: List[Dict[str, Any]] = [
         }
     }
 ]
+
+# --- 30 Curated Landmark Indian Supreme Court Case Studies ---
+from app.landmark_cases import LANDMARK_CASES
+
+for c in LANDMARK_CASES:
+    DEMO_CORPUS.append({
+        "id": c["id"],
+        "topic": c["topic"].lower().replace(" ", "_"),
+        "title": c["case_title"],
+        "case_title": c["case_title"],
+        "year": c["year"],
+        "court": c["court"],
+        "citation": c["citation"],
+        "statute": c["statute"],
+        "section": c["citation"],
+        "court_or_authority": c["court"],
+        "short_explanation": f"{c['facts_summary']} Key Holding: {c['key_holding']} Legal Principle: {c['legal_principle']} Significance: {c['why_it_matters']}",
+        "facts_summary": c["facts_summary"],
+        "key_holding": c["key_holding"],
+        "legal_principle": c["legal_principle"],
+        "why_it_matters": c["why_it_matters"],
+        "source_name": f"Supreme Court of India ({c['citation']})",
+        "official_url": c["official_url"],
+        "verification_status": c["verification_status"],
+        "is_demo": False,
+        "is_landmark_case": True,
+        "limitations": "Judicial precedent under Article 141 of the Constitution of India is binding on all courts within India, subject to distinct factual matrix.",
+        "keywords_by_lang": c["keywords_by_lang"],
+    })
+
